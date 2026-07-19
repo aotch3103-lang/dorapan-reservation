@@ -255,7 +255,7 @@ async function renderAsync(){
         <p class="sub" style="margin:-4px 0 10px;">ドラパンは24:00閉店です。12:00からご利用いただけますが、閉店時間をご理解のうえ、開始時間をご入力ください。</p>
         <input type="time" id="in-startTime" value="${state.startTime}" step="60"
           onchange="setStartTimeSilent(this)">
-        <div id="time-error-msg" class="capacity-note full" style="margin-top:10px; display:${startTimeBlocked?'block':'none'};">
+        <div id="time-error-msg" class="capacity-note full" style="margin-top:10px; text-align:center; line-height:1.9; display:${startTimeBlocked?'block':'none'};">
           ${timeErrorMessageHtml()}
         </div>
       </div>
@@ -441,7 +441,7 @@ function timeErrorMessageHtml(){
     return '12:00より前のご予約はお受けしておりません。<br>12:00以降の時間をご入力ください。';
   }
   if(startTimeBlocked === 'late'){
-    return '21:30以降のご利用をご希望の場合は、恐れ入りますが公式LINEの<br>トーク画面またはお電話（089-954-4614）でお問い合わせください。';
+    return '21：30以降のご利用をご希望の場合は<br>恐れ入りますが公式LINEのトーク画面<br>またはお電話（089-954-4614）で<br>お問い合わせください🐰';
   }
   return '';
 }
