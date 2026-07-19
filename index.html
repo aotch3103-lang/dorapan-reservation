@@ -155,17 +155,32 @@ let submitError = "";
 
 const state = {
   date:"", startTime:"",
-  tableCount:null, format:"四麻", points:"25000",
+  tableCount:null, roomType:"ルームシェアOK", format:"四麻", points:"25000",
   akadora:true, hanahai:false, chip:false, yakitori:false,
   name:"", phone:"", request:"",
 };
 
+// 貸卓料金表（税込・15分単位で計算）。実際のお会計は当日のご利用時間で変わるため、あくまで目安として表示する。
+const PRICE_TABLE = {
+  "ルームシェアOK": { hourly: 900, pack3h: 2400 },
+  "貸切希望": { rates: { 1: 1800, 2: 2200, 3: 2500 } },
+};
+function priceNoteHtml(){
+  if(!state.tableCount) return "";
+  if(state.roomType === "貸切希望"){
+    const rate = PRICE_TABLE["貸切希望"].rates[state.tableCount];
+    return `<div class="capacity-note">貸切プラン（${state.tableCount}卓貸切）の目安：1時間 ${rate.toLocaleString()}円〜（税込・15分単位で計算／実際のご利用時間で変わります）</div>`;
+  }
+  const p = PRICE_TABLE["ルームシェアOK"];
+  return `<div class="capacity-note">ルームシェアOKプランの目安：1時間 ${p.hourly.toLocaleString()}円／3時間パック ${p.pack3h.toLocaleString()}円（税込・15分単位で計算／実際のご利用時間で変わります）</div>`;
+}
+
 const usingRealBackend = () => !!CONFIG.APPS_SCRIPT_URL;
 
 /* ---------- データ層：本番(Apps Script) / テスト(window.storage) 切り替え ---------- */
-async function apiGetCapacity(date, startTime){
+async function apiGetCapacity(date){
   if(usingRealBackend()){
-    const url = `${CONFIG.APPS_SCRIPT_URL}?action=capacity&date=${encodeURIComponent(date)}&startTime=${encodeURIComponent(startTime)}`;
+    const url = `${CONFIG.APPS_SCRIPT_URL}?action=capacity&date=${encodeURIComponent(date)}`;
     const res = await fetch(url);
     return await res.json();
   }
@@ -173,10 +188,12 @@ async function apiGetCapacity(date, startTime){
   try{
     const stored = await window.storage.get(`reservations:${date}`, true);
     const list = stored && stored.value ? JSON.parse(stored.value) : [];
-    const reserved = list.filter(r=>r.startTime===startTime).reduce((sum,r)=>sum+Number(r.tableCount||0),0);
-    return {totalTables:CONFIG.TOTAL_TABLES, reserved, remaining:CONFIG.TOTAL_TABLES-reserved};
+    let reserved = list.reduce((sum,r)=>sum+Number(r.tableCount||0),0);
+    const hasCharter = list.some(r=>r.roomType==='貸切希望');
+    if(hasCharter) reserved = CONFIG.TOTAL_TABLES;
+    return {totalTables:CONFIG.TOTAL_TABLES, reserved, remaining:Math.max(0,CONFIG.TOTAL_TABLES-reserved), hasExistingReservation: reserved>0};
   }catch(e){
-    return {totalTables:CONFIG.TOTAL_TABLES, reserved:0, remaining:CONFIG.TOTAL_TABLES};
+    return {totalTables:CONFIG.TOTAL_TABLES, reserved:0, remaining:CONFIG.TOTAL_TABLES, hasExistingReservation:false};
   }
 }
 
@@ -241,11 +258,12 @@ async function renderAsync(){
   }
 
   if(step===2){
-    if(state.date && state.startTime && !capacityInfo){
-      capacityInfo = await apiGetCapacity(state.date, state.startTime);
+    if(state.date && !capacityInfo){
+      capacityInfo = await apiGetCapacity(state.date);
       renderAsync(); return;
     }
     const remaining = capacityInfo ? capacityInfo.remaining : CONFIG.TOTAL_TABLES;
+    const hasExisting = capacityInfo ? capacityInfo.hasExistingReservation : false;
     body = `
       <div class="card">
         <h2>卓数・設定</h2>
@@ -256,8 +274,16 @@ async function renderAsync(){
             onclick="${n>remaining?'':'setTableCount('+n+')'}">${n}卓</div>`).join('')}
         </div>
         <div class="capacity-note ${remaining<=0?'full':''}">
-          ${remaining<=0 ? 'この時間帯は満卓です。別の時間をお選びください。' : `この時間帯の残り卓数：${remaining}／${capacityInfo?capacityInfo.totalTables:CONFIG.TOTAL_TABLES}卓`}
+          ${remaining<=0 ? '本日はすでに満卓です。別の日をお選びください。' : `この日の残り卓数：${remaining}／${capacityInfo?capacityInfo.totalTables:CONFIG.TOTAL_TABLES}卓`}
         </div>
+        <div class="section-label">利用形態</div>
+        <div class="chip-grid two">
+          <div class="chip ${state.roomType==='ルームシェアOK'?'selected':''}" onclick="setField('roomType','ルームシェアOK')">ルームシェアOK</div>
+          <div class="chip ${state.roomType==='貸切希望'?'selected':''} ${hasExisting?'disabled':''}"
+            onclick="${hasExisting?'':"setField('roomType','貸切希望')"}">貸切希望</div>
+        </div>
+        ${hasExisting ? `<div class="capacity-note full">恐れ入りますが、本日はすでに他のお客様のご予約が入っているため、貸切のご予約は承れません。ルームシェアでのご利用をお願いいたします。</div>` : ''}
+        ${priceNoteHtml()}
         <div class="section-label">設定</div>
         <div class="chip-grid two">
           ${["三麻","四麻"].map(f=>`<div class="chip ${state.format===f?'selected':''}" onclick="setField('format','${f}')">${f}</div>`).join('')}
@@ -316,6 +342,8 @@ async function renderAsync(){
         ${submitError ? `<div class="error-msg">${submitError}</div>` : ''}
         <div class="summary-row"><span class="k">日時</span><span class="v">${state.date}　${state.startTime}〜</span></div>
         <div class="summary-row"><span class="k">利用卓数</span><span class="v">${state.tableCount}卓</span></div>
+        <div class="summary-row"><span class="k">利用形態</span><span class="v">${state.roomType}</span></div>
+        ${priceNoteHtml()}
         <div class="summary-row"><span class="k">設定</span><span class="v">${state.format}</span></div>
         <div class="summary-row"><span class="k">持ち点数</span><span class="v">${state.points}点</span></div>
         <div class="summary-row"><span class="k">赤牌</span><span class="v">${state.akadora?'あり':'なし'}</span></div>
@@ -387,7 +415,7 @@ function restoreFocus(info){
 
 function stepValid(){
   if(step===1) return !!(state.date && state.startTime);
-  if(step===2) return !!(state.tableCount && state.format && state.points);
+  if(step===2) return !!(state.tableCount && state.roomType && state.format && state.points);
   if(step===3) return true;
   if(step===4) return !!(state.name.trim() && state.phone.trim());
   return true;
@@ -411,7 +439,7 @@ function setStartTimeSilent(el){
     if(mins > 22*60) value = "22:00";
   }
   el.value = value; // 範囲外だった場合、入力欄の表示も補正した値に揃える
-  state.startTime = value; capacityInfo = null; syncButtonState();
+  state.startTime = value; syncButtonState();
 }
 
 function syncButtonState(){
@@ -426,7 +454,7 @@ async function submitReservation(){
   submitting = true; submitError = ""; render();
   const record = {
     name: state.name, phone: state.phone, date: state.date, startTime: state.startTime,
-    tableCount: state.tableCount, format: state.format, points: state.points,
+    tableCount: state.tableCount, roomType: state.roomType, format: state.format, points: state.points,
     akadora: state.akadora, hanahai: state.hanahai, chip: state.chip, yakitori: state.yakitori,
     request: state.request,
   };
@@ -469,7 +497,7 @@ async function renderStaffPanel(){
       <div style="font-weight:700;color:var(--green-dark);margin-bottom:6px;">${date} の予約</div>
       ${list.length===0 ? `<div class="empty">この日の予約はまだありません</div>` :
         list.map(r=>`<div class="res-item">
-          ${r.startTime}〜／${r.tableCount}卓／${r.format}／${r.points}点<br>
+          ${r.startTime}〜／${r.tableCount}卓／${r.roomType==='貸切希望'?'<strong style="color:var(--pink-deep);">貸切希望</strong>':'ルームシェアOK'}／${r.format}／${r.points}点<br>
           ${r.name}様・${r.phone}<br>
           赤牌:${r.akadora===true||r.akadora==='あり'?'あり':'なし'}　花牌:${r.hanahai===true||r.hanahai==='あり'?'あり':'なし'}　チップ:${r.chip===true||r.chip==='あり'?'あり':'なし'}　ヤキトリ:${r.yakitori===true||r.yakitori==='あり'?'あり':'なし'}
           ${r.request ? `<br>ご要望：${r.request}` : ''}
