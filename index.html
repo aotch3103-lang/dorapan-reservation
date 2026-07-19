@@ -146,6 +146,7 @@ const app = document.getElementById('app');
 let step = 1;
 let staffOpen = false;
 let staffAuthed = false;
+let startTimeBlocked = false; // false | 'early' | 'late'
 let staffViewDate = null;
 let staffPasswordInput = "";
 let staffError = "";
@@ -250,9 +251,13 @@ async function renderAsync(){
         <label class="field">ご利用日</label>
         <input type="date" id="in-date" value="${state.date}" min="${new Date().toISOString().slice(0,10)}"
           onchange="setDateSilent(this.value)">
-        <label class="field">開始時間（12:00〜22:00の間でご記入ください）</label>
-        <input type="time" id="in-startTime" value="${state.startTime}" min="12:00" max="22:00" step="60"
+        <label class="field">開始時間</label>
+        <p class="sub" style="margin:-4px 0 10px;">ドラパンは24:00閉店です。12:00からご利用いただけますが、閉店時間をご理解のうえ、開始時間をご入力ください。</p>
+        <input type="time" id="in-startTime" value="${state.startTime}" step="60"
           onchange="setStartTimeSilent(this)">
+        <div id="time-error-msg" class="capacity-note full" style="margin-top:10px; display:${startTimeBlocked?'block':'none'};">
+          ${timeErrorMessageHtml()}
+        </div>
       </div>
     `;
   }
@@ -431,16 +436,42 @@ function setFieldSilent(name, value){ state[name] = value; syncButtonState(); }
 
 function setDateSilent(value){ state.date = value; capacityInfo = null; syncButtonState(); }
 
+function timeErrorMessageHtml(){
+  if(startTimeBlocked === 'early'){
+    return '12:00より前のご予約はお受けしておりません。<br>12:00以降の時間をご入力ください。';
+  }
+  if(startTimeBlocked === 'late'){
+    return '21:30以降のご利用をご希望の場合は、恐れ入りますが公式LINEの<br>トーク画面またはお電話（089-954-4614）でお問い合わせください。';
+  }
+  return '';
+}
+
 function setStartTimeSilent(el){
-  let value = el.value;
-  if(value){
+  const value = el.value;
+  const msgEl = document.getElementById('time-error-msg');
+  if(!value){
+    startTimeBlocked = false;
+    state.startTime = "";
+  } else {
     const [h,m] = value.split(':').map(Number);
     const mins = h*60+m;
-    if(mins < 12*60) value = "12:00";
-    if(mins > 22*60) value = "22:00";
+    if(mins < 12*60){
+      startTimeBlocked = 'early';
+      state.startTime = "";
+    } else if(mins > 21*60+30){
+      startTimeBlocked = 'late';
+      state.startTime = "";
+    } else {
+      startTimeBlocked = false;
+      state.startTime = value;
+    }
   }
-  el.value = value; // 範囲外だった場合、入力欄の表示も補正した値に揃える
-  state.startTime = value; syncButtonState();
+  // 入力欄の値自体は書き換えない（スクロール操作中に書き換えるとピッカーが壊れるため）
+  if(msgEl){
+    msgEl.innerHTML = timeErrorMessageHtml();
+    msgEl.style.display = startTimeBlocked ? 'block' : 'none';
+  }
+  syncButtonState();
 }
 
 function syncButtonState(){
