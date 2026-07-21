@@ -148,6 +148,8 @@ let staffOpen = false;
 let staffAuthed = false;
 let startTimeBlocked = false; // false | 'early' | 'late'
 let staffViewDate = null;
+let monthOverviewData = null; // ログイン後にキャッシュする「今月＋来月」の全予約データ
+let expandedDates = new Set(); // タップして展開中の日付
 let staffPasswordInput = "";
 let staffError = "";
 let capacityInfo = null; // {totalTables, reserved, remaining}
@@ -220,20 +222,37 @@ async function apiSubmit(record){
   }
 }
 
-async function apiGetStaffList(date, password){
+async function apiGetMonthOverview(password){
   if(usingRealBackend()){
-    const url = `${CONFIG.APPS_SCRIPT_URL}?action=staff&date=${encodeURIComponent(date)}&password=${encodeURIComponent(password)}`;
+    const url = `${CONFIG.APPS_SCRIPT_URL}?action=monthOverview&password=${encodeURIComponent(password)}`;
     const res = await fetch(url);
     const data = await res.json();
     if(data.error) throw new Error(data.error);
-    return data.reservations;
+    return data.months; // [{sheetName, reservations:[...]}, {sheetName, reservations:[...]}]
   }
   if(password !== CONFIG.DEMO_STAFF_PASSWORD) throw new Error("unauthorized");
   try{
-    const stored = await window.storage.get(`reservations:${date}`, true);
-    return stored && stored.value ? JSON.parse(stored.value) : [];
+    const listResult = await window.storage.list('reservations:', true);
+    const keys = listResult && listResult.keys ? listResult.keys : [];
+    const now = new Date();
+    const months = [];
+    for(let offset=0; offset<2; offset++){
+      const d = new Date(now.getFullYear(), now.getMonth()+offset, 1);
+      const mk = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      const matchingKeys = keys.filter(k => k.startsWith(`reservations:${mk}`));
+      let reservations = [];
+      for(const k of matchingKeys){
+        try{
+          const r = await window.storage.get(k, true);
+          if(r && r.value) reservations = reservations.concat(JSON.parse(r.value));
+        }catch(e){}
+      }
+      reservations.sort((a,b)=>(a.date+a.startTime).localeCompare(b.date+b.startTime));
+      months.push({sheetName:mk, reservations});
+    }
+    return months;
   }catch(e){
-    return [];
+    return [{sheetName:'', reservations:[]},{sheetName:'', reservations:[]}];
   }
 }
 /* --------------------------------------------------------------------------- */
@@ -502,7 +521,27 @@ async function submitReservation(){
 
 function toggleStaffPanel(){ staffOpen = !staffOpen; render(); }
 
-async function renderStaffPanel(){
+function monthLabelFromSheetName(sheetName){
+  const m = (sheetName||'').match(/^(\d{2})(\d{2})/);
+  if(!m) return sheetName || '(不明な月)';
+  return `${2000+Number(m[1])}年${Number(m[2])}月`;
+}
+function formatDateShort(dateStr){
+  const d = new Date(dateStr+'T00:00:00');
+  if(isNaN(d)) return dateStr;
+  const w = ['日','月','火','水','木','金','土'][d.getDay()];
+  return `${d.getMonth()+1}/${d.getDate()}（${w}）`;
+}
+function groupByDate(reservations){
+  const map = {};
+  (reservations||[]).forEach(r=>{
+    if(!map[r.date]) map[r.date] = [];
+    map[r.date].push(r);
+  });
+  return Object.keys(map).sort().map(date=>({date, items:map[date]}));
+}
+
+function renderStaffPanel(){
   if(!staffOpen) return '';
   if(!staffAuthed){
     return `
@@ -517,49 +556,72 @@ async function renderStaffPanel(){
       </div>
     `;
   }
-  const date = staffViewDate || state.date || new Date().toISOString().slice(0,10);
-  const list = await apiGetStaffList(date, staffPasswordInput).catch(()=>[]);
+  if(!monthOverviewData){
+    return `<div class="staff-panel"><div class="empty">読み込み中…</div></div>`;
+  }
+  const monthsHtml = monthOverviewData.map(month=>{
+    const groups = groupByDate(month.reservations);
+    return `
+      <div style="margin-bottom:14px;">
+        <div style="font-weight:900;color:var(--green-dark);margin-bottom:8px;">${monthLabelFromSheetName(month.sheetName)}</div>
+        ${groups.length===0 ? `<div class="empty">この月の予約はまだありません</div>` :
+          groups.map(g=>{
+            const expanded = expandedDates.has(g.date);
+            const compactLines = g.items.map(r=>
+              `${r.startTime}〜　${r.name}様　${r.tableCount}卓${r.roomType==='貸切希望' ? '　<span style="color:var(--pink-deep);font-weight:900;">（貸切）</span>' : ''}`
+            ).join('<br>');
+            const detailHtml = g.items.map(r=>`
+              <div class="res-item">
+                ${r.startTime}〜／${r.tableCount}卓／${r.roomType==='貸切希望'?'<strong style="color:var(--pink-deep);">貸切希望</strong>':'ルームシェアOK'}／${r.format}／${r.points}点<br>
+                ${r.name}様・${r.phone}<br>
+                赤牌:${r.akadora===true||r.akadora==='あり'?'あり':'なし'}　花牌:${r.hanahai===true||r.hanahai==='あり'?'あり':'なし'}　チップ:${r.chip===true||r.chip==='あり'?'あり':'なし'}　ヤキトリ:${r.yakitori===true||r.yakitori==='あり'?'あり':'なし'}
+                ${r.request ? `<br>ご要望：${r.request}` : ''}
+              </div>`).join('');
+            return `
+              <div style="border-bottom:1px solid var(--green-pale); padding:8px 0; cursor:pointer;" onclick="toggleDateExpand('${g.date}')">
+                <div style="font-weight:700;">${expanded?'▼':'▶'} ${formatDateShort(g.date)}</div>
+                <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">${compactLines}</div>
+              </div>
+              ${expanded ? detailHtml : ''}
+            `;
+          }).join('')
+        }
+      </div>
+    `;
+  }).join('');
   return `
     <div class="staff-panel">
-      <h3>予約状況を確認　<span style="cursor:pointer;text-decoration:underline;" onclick="staffLogout()">ログアウト</span></h3>
-      <div class="login-row" style="margin-bottom:12px;">
-        <input type="date" id="staffDateInput" value="${date}">
-        <button onclick="staffDateSearch()">表示</button>
-      </div>
-      <div style="font-weight:700;color:var(--green-dark);margin-bottom:6px;">${date} の予約</div>
-      ${list.length===0 ? `<div class="empty">この日の予約はまだありません</div>` :
-        list.map(r=>`<div class="res-item">
-          ${r.startTime}〜／${r.tableCount}卓／${r.roomType==='貸切希望'?'<strong style="color:var(--pink-deep);">貸切希望</strong>':'ルームシェアOK'}／${r.format}／${r.points}点<br>
-          ${r.name}様・${r.phone}<br>
-          赤牌:${r.akadora===true||r.akadora==='あり'?'あり':'なし'}　花牌:${r.hanahai===true||r.hanahai==='あり'?'あり':'なし'}　チップ:${r.chip===true||r.chip==='あり'?'あり':'なし'}　ヤキトリ:${r.yakitori===true||r.yakitori==='あり'?'あり':'なし'}
-          ${r.request ? `<br>ご要望：${r.request}` : ''}
-        </div>`).join('')
-      }
+      <h3>予約状況を確認　<span style="cursor:pointer;text-decoration:underline;" onclick="staffRefresh()">更新</span>　<span style="cursor:pointer;text-decoration:underline;" onclick="staffLogout()">ログアウト</span></h3>
+      ${monthsHtml}
     </div>
   `;
 }
 
-function staffDateSearch(){
-  const el = document.getElementById('staffDateInput');
-  if(el && el.value){ staffViewDate = el.value; render(); }
-}
-
 async function staffLogin(){
-  const date = staffViewDate || state.date || new Date().toISOString().slice(0,10);
   try{
-    await apiGetStaffList(date, staffPasswordInput);
-    staffAuthed = true; staffError = ""; staffViewDate = date;
+    monthOverviewData = await apiGetMonthOverview(staffPasswordInput);
+    staffAuthed = true; staffError = "";
   }catch(e){
     staffError = "パスワードが違います";
   }
   render();
 }
-function staffLogout(){ staffAuthed = false; staffPasswordInput = ""; staffViewDate = null; render(); }
+async function staffRefresh(){
+  try{
+    monthOverviewData = await apiGetMonthOverview(staffPasswordInput);
+  }catch(e){}
+  render();
+}
+function staffLogout(){ staffAuthed = false; staffPasswordInput = ""; monthOverviewData = null; expandedDates = new Set(); render(); }
+function toggleDateExpand(date){
+  if(expandedDates.has(date)) expandedDates.delete(date); else expandedDates.add(date);
+  render();
+}
 
 // グローバル公開
 window.setField=setField; window.setFieldSilent=setFieldSilent; window.setDateSilent=setDateSilent;
 window.setStartTimeSilent=setStartTimeSilent; window.setTableCount=setTableCount;
-window.staffDateSearch=staffDateSearch;
+window.toggleDateExpand=toggleDateExpand; window.staffRefresh=staffRefresh;
 window.toggleSwitch=toggleSwitch; window.goStep=goStep; window.submitReservation=submitReservation;
 window.toggleStaffPanel=toggleStaffPanel; window.staffLogin=staffLogin; window.staffLogout=staffLogout;
 
