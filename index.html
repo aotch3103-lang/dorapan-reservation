@@ -139,7 +139,7 @@ const CONFIG = {
   DEMO_STAFF_PASSWORD: "0315", // ↑APPS_SCRIPT_URL未設定時のテスト用パスワード
 };
 const SHOP_NAME = "ドラパン";
-const NOTICE_TEXT = "※ドラパンでは金牌・レインボウ牌のご用意はございません。<br>あらかじめご了承ください。<br>※キャンセル・変更をご希望の場合は<br>このアプリからは操作できません。<br>お手数ですが、公式LINEのトーク画面<br>もしくは089-954-4614（定休日：日・月）まで直接ご連絡ください。";
+const NOTICE_TEXT = "※ドラパンでは金牌・レインボウ牌のご用意はございません。<br>あらかじめご了承ください。<br>※キャンセル・変更をご希望の場合は<br>このアプリからは操作できません。<br>お手数ですが、公式LINEのトーク画面<br>もしくは089-954-4614<br>（定休日：日・月）まで直接ご連絡ください。";
 /* ========================================================= */
 
 const app = document.getElementById('app');
@@ -388,7 +388,7 @@ async function renderAsync(){
         <h2>ご予約を承りました</h2>
         <p style="font-size:19px; font-weight:900; color:var(--pink-deep); margin:0 0 4px; letter-spacing:.02em;">${state.date}　${state.startTime}〜</p>
         <p>${state.tableCount}卓／${state.name}様<br>当日のご来店をお待ちしております。</p>
-        <div class="notice" style="margin:0 0 20px;">キャンセル・変更をご希望の場合は<br>このアプリからは操作できません。<br>お手数ですが、公式LINEのトーク画面<br>もしくは089-954-4614（定休日：日・月）まで直接ご連絡ください。</div>
+        <div class="notice" style="margin:0 0 20px;">キャンセル・変更をご希望の場合は<br>このアプリからは操作できません。<br>お手数ですが、公式LINEのトーク画面<br>もしくは089-954-4614<br>（定休日：日・月）まで直接ご連絡ください。</div>
         <div class="btn-row" style="padding:0;">
           <button class="btn btn-secondary" onclick="location.reload()">新しく予約する</button>
         </div>
