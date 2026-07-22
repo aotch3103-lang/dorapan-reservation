@@ -187,7 +187,8 @@ async function initLiff(){
   try{
     await liff.init({ liffId: CONFIG.LIFF_ID });
     if(!liff.isLoggedIn()){
-      liff.login();
+      // LINEにログインしていない場合（外部ブラウザで開いた場合など）は、
+      // ログイン画面へ飛ばして予約フォームをブロックせず、そのまま通常フォームとして使えるようにする。
       return;
     }
     const profile = await liff.getProfile();
