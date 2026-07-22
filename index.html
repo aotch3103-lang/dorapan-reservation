@@ -160,6 +160,7 @@ const CONFIG = {
   LIFF_ID: "2010788751-CHBAw3u5",
   TOTAL_TABLES: 3,           // 店舗の総卓数
   DEMO_STAFF_PASSWORD: "0315", // ↑APPS_SCRIPT_URL未設定時のテスト用パスワード
+  CLOSED_WEEKDAYS: [0, 1], // 定休日（0=日曜, 1=月曜, ...6=土曜）
 };
 const SHOP_NAME = "ドラパン";
 const TILE_NOTICE_TEXT = "※ドラパンでは金牌・レインボウ牌・白ポッチのご用意はございません。<br>あらかじめご了承ください。";
@@ -171,6 +172,7 @@ let step = 0;
 let staffOpen = false;
 let staffAuthed = false;
 let startTimeBlocked = false; // false | 'early' | 'late'
+let dateBlocked = false;
 let staffViewDate = null;
 let monthOverviewData = null; // ログイン後にキャッシュする「今月＋来月」の全予約データ
 let expandedDates = new Set(); // タップして展開中の日付
@@ -342,6 +344,9 @@ async function renderAsync(){
         <label class="field">ご利用日</label>
         <input type="date" id="in-date" value="${state.date}" min="${new Date().toISOString().slice(0,10)}"
           onchange="setDateSilent(this.value)">
+        <div id="date-error-msg" class="capacity-note full" style="margin-top:-8px; margin-bottom:16px; text-align:center; line-height:1.9; display:${dateBlocked?'block':'none'};">
+          定休日（日曜・月曜）のため、この日はご予約いただけません。<br>別の日をお選びください。
+        </div>
         <label class="field">開始時間</label>
         <p class="sub" style="margin:-4px 0 10px;">ドラパンは24:00閉店です。12:00からご利用いただけますが、閉店時間をご理解のうえ、開始時間をご入力ください。</p>
         <input type="time" id="in-startTime" value="${state.startTime}" step="60"
@@ -532,7 +537,23 @@ function setField(name, value){ state[name] = value; render(); }
 // 画面を作り直さずに状態だけ更新し、ボタンの有効/無効だけを軽く同期する。
 function setFieldSilent(name, value){ state[name] = value; syncButtonState(); }
 
-function setDateSilent(value){ state.date = value; capacityInfo = null; syncButtonState(); }
+function setDateSilent(value){
+  const msgEl = document.getElementById('date-error-msg');
+  if(value){
+    const d = new Date(value + 'T00:00:00');
+    if(CONFIG.CLOSED_WEEKDAYS.includes(d.getDay())){
+      dateBlocked = true;
+      state.date = "";
+      capacityInfo = null;
+      if(msgEl) msgEl.style.display = 'block';
+      syncButtonState();
+      return;
+    }
+  }
+  dateBlocked = false;
+  if(msgEl) msgEl.style.display = 'none';
+  state.date = value; capacityInfo = null; syncButtonState();
+}
 
 function timeErrorMessageHtml(){
   if(startTimeBlocked === 'early'){
