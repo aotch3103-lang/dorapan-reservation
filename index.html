@@ -529,10 +529,10 @@ async function renderAsync(){
     app.innerHTML = `
       <div class="done-screen">
         <div class="mark">✓</div>
-        <h2>ご予約を承りました</h2>
+        <h2>ご予約希望を受け付けました</h2>
         <p style="font-size:19px; font-weight:900; color:var(--pink-deep); margin:0 0 4px; letter-spacing:.02em;">${state.date}　${state.startTime}〜</p>
         <p style="font-size:19px; font-weight:900; color:var(--pink-deep); margin:0 0 4px; letter-spacing:.02em;">${state.tableCount}卓／${state.name}様</p>
-        <p>当日のご来店をお待ちしております🐰</p>
+        <p>内容を確認のうえ、確定のご連絡を公式LINEにて改めてお送りいたします。ご来店日までに確定のご連絡が届かない場合は、お手数ですが公式LINEのトーク画面または089-954-4614までご確認ください🐰</p>
         <div class="notice" style="margin:0 0 20px;">キャンセル・変更をご希望の場合は<br>このアプリからは操作できません。<br>お手数ですが、公式LINEのトーク画面<br>もしくは089-954-4614<br>（定休日：日・月）まで直接ご連絡ください。</div>
         <div class="btn-row" style="padding:0;">
           <button class="btn btn-secondary" onclick="location.reload()">新しく予約する</button>
