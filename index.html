@@ -160,7 +160,6 @@ const CONFIG = {
   LIFF_ID: "2010788751-CHBAw3u5",
   TOTAL_TABLES: 3,           // 店舗の総卓数
   DEMO_STAFF_PASSWORD: "0315", // ↑APPS_SCRIPT_URL未設定時のテスト用パスワード
-  CLOSED_WEEKDAYS: [0, 1], // 定休日（0=日曜, 1=月曜, ...6=土曜）
 };
 const SHOP_NAME = "ドラパン";
 const TILE_NOTICE_TEXT = "※ドラパンでは金牌・レインボウ牌・白ポッチのご用意はございません。<br>あらかじめご了承ください。";
@@ -172,7 +171,9 @@ let step = 0;
 let staffOpen = false;
 let staffAuthed = false;
 let startTimeBlocked = false; // false | 'early' | 'late'
-let dateBlocked = false;
+let dateBlocked = false; // false、または表示するメッセージ文字列
+let closedDatesList = []; // [{date, reason}] 臨時休業日
+let closedWeekdays = [0, 1]; // 定休日（曜日番号）。サーバーから取得するまでのデフォルト値
 let staffViewDate = null;
 let monthOverviewData = null; // ログイン後にキャッシュする「今月＋来月」の全予約データ
 let expandedDates = new Set(); // タップして展開中の日付
@@ -302,6 +303,71 @@ async function apiGetMonthOverview(password){
     return [{sheetName:'', reservations:[]},{sheetName:'', reservations:[]}];
   }
 }
+async function apiGetClosedDates(){
+  if(usingRealBackend()){
+    try{
+      const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=closedDates`);
+      const data = await res.json();
+      if(Array.isArray(data.closedWeekdays)) closedWeekdays = data.closedWeekdays;
+      return data.closedDates || [];
+    }catch(e){ return []; }
+  }
+  try{
+    const storedWeekdays = await window.storage.get('closedWeekdays', true);
+    if(storedWeekdays && storedWeekdays.value) closedWeekdays = JSON.parse(storedWeekdays.value);
+    const stored = await window.storage.get('closedDates', true);
+    return stored && stored.value ? JSON.parse(stored.value) : [];
+  }catch(e){ return []; }
+}
+
+async function apiUpdateClosedWeekdays(weekdays, password){
+  if(usingRealBackend()){
+    const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=updateClosedWeekdays&password=${encodeURIComponent(password)}`, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({weekdays}),
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    return data;
+  }
+  await window.storage.set('closedWeekdays', JSON.stringify(weekdays), true);
+  return {result:'ok'};
+}
+
+async function apiAddClosedDate(date, reason, password){
+  if(usingRealBackend()){
+    const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=addClosedDate&password=${encodeURIComponent(password)}`, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({date, reason}),
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    return data;
+  }
+  const list = await apiGetClosedDates();
+  list.push({date, reason});
+  await window.storage.set('closedDates', JSON.stringify(list), true);
+  return {result:'ok'};
+}
+
+async function apiRemoveClosedDate(date, password){
+  if(usingRealBackend()){
+    const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=removeClosedDate&password=${encodeURIComponent(password)}`, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({date}),
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    return data;
+  }
+  let list = await apiGetClosedDates();
+  list = list.filter(c=>c.date!==date);
+  await window.storage.set('closedDates', JSON.stringify(list), true);
+  return {result:'ok'};
+}
 /* --------------------------------------------------------------------------- */
 
 function loadingScreenHtml(message){
@@ -345,7 +411,7 @@ async function renderAsync(){
         <input type="date" id="in-date" value="${state.date}" min="${new Date().toISOString().slice(0,10)}"
           onchange="setDateSilent(this.value)">
         <div id="date-error-msg" class="capacity-note full" style="margin-top:-8px; margin-bottom:16px; text-align:center; line-height:1.9; display:${dateBlocked?'block':'none'};">
-          定休日（日曜・月曜）のため、この日はご予約いただけません。<br>別の日をお選びください。
+          ${dateBlocked || ''}
         </div>
         <label class="field">開始時間</label>
         <p class="sub" style="margin:-4px 0 10px;">ドラパンは24:00閉店です。12:00からご利用いただけますが、閉店時間をご理解のうえ、開始時間をご入力ください。</p>
@@ -541,11 +607,18 @@ function setDateSilent(value){
   const msgEl = document.getElementById('date-error-msg');
   if(value){
     const d = new Date(value + 'T00:00:00');
-    if(CONFIG.CLOSED_WEEKDAYS.includes(d.getDay())){
-      dateBlocked = true;
-      state.date = "";
-      capacityInfo = null;
-      if(msgEl) msgEl.style.display = 'block';
+    if(closedWeekdays.includes(d.getDay())){
+      dateBlocked = '定休日（日曜・月曜）のため、この日はご予約いただけません。<br>別の日をお選びください。';
+      state.date = ""; capacityInfo = null;
+      if(msgEl){ msgEl.innerHTML = dateBlocked; msgEl.style.display = 'block'; }
+      syncButtonState();
+      return;
+    }
+    const closedMatch = closedDatesList.find(c => c.date === value);
+    if(closedMatch){
+      dateBlocked = `臨時休業のため、この日はご予約いただけません。${closedMatch.reason ? '（'+closedMatch.reason+'）' : ''}<br>別の日をお選びください。`;
+      state.date = ""; capacityInfo = null;
+      if(msgEl){ msgEl.innerHTML = dateBlocked; msgEl.style.display = 'block'; }
       syncButtonState();
       return;
     }
@@ -692,9 +765,43 @@ function renderStaffPanel(){
       </div>
     `;
   }).join('');
+  const weekdayLabels = ['日','月','火','水','木','金','土'];
+  const weekdaysHtml = `
+    <div style="margin-bottom:16px; padding-bottom:14px; border-bottom:2px solid var(--green-pale);">
+      <div style="font-weight:900;color:var(--green-dark);margin-bottom:8px;">定休日の設定</div>
+      <div style="display:flex; gap:6px; margin-bottom:10px;">
+        ${weekdayLabels.map((label,i)=>`
+          <div class="chip" style="flex:1; padding:8px 4px; ${closedWeekdays.includes(i)?'background:var(--pink);border-color:var(--pink);color:var(--white);':''}"
+            onclick="toggleClosedWeekday(${i})">${label}</div>
+        `).join('')}
+      </div>
+      <button class="btn btn-primary" style="width:100%; padding:10px;" onclick="staffSaveClosedWeekdays()">この内容で保存</button>
+    </div>
+  `;
+  const closedDatesHtml = `
+    <div style="margin-bottom:16px; padding-bottom:14px; border-bottom:2px solid var(--green-pale);">
+      <div style="font-weight:900;color:var(--green-dark);margin-bottom:8px;">臨時休業日の管理</div>
+      <div class="login-row" style="margin-bottom:8px;">
+        <input type="date" id="closedDateInput">
+        <button onclick="staffAddClosedDate()">追加</button>
+      </div>
+      <input type="text" id="closedReasonInput" placeholder="理由（任意）"
+        style="width:100%;margin-bottom:12px;padding:9px 10px;border-radius:10px;border:2px solid var(--green-pale);font-size:13px;box-sizing:border-box;">
+      ${closedDatesList.length===0 ? `<div class="empty" style="padding:14px;">登録されている休業日はありません</div>` :
+        closedDatesList.map(c=>`
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--green-pale);font-size:13px;">
+            <span>${c.date}${c.reason?'　'+c.reason:''}</span>
+            <span style="cursor:pointer;color:var(--pink-deep);font-weight:700;text-decoration:underline;" onclick="staffRemoveClosedDate('${c.date}')">削除</span>
+          </div>
+        `).join('')
+      }
+    </div>
+  `;
   return `
     <div class="staff-panel">
       <h3>予約状況を確認　<span style="cursor:pointer;text-decoration:underline;" onclick="staffRefresh()">更新</span>　<span style="cursor:pointer;text-decoration:underline;" onclick="staffLogout()">ログアウト</span></h3>
+      ${weekdaysHtml}
+      ${closedDatesHtml}
       ${monthsHtml}
     </div>
   `;
@@ -721,16 +828,54 @@ function toggleDateExpand(date){
   render();
 }
 
+function toggleClosedWeekday(dayIndex){
+  const i = closedWeekdays.indexOf(dayIndex);
+  if(i>-1) closedWeekdays.splice(i,1); else closedWeekdays.push(dayIndex);
+  render();
+}
+async function staffSaveClosedWeekdays(){
+  try{
+    await apiUpdateClosedWeekdays(closedWeekdays, staffPasswordInput);
+    alert('定休日の設定を保存しました');
+  }catch(e){
+    alert('保存に失敗しました。もう一度お試しください。');
+  }
+}
+async function staffAddClosedDate(){
+  const dateEl = document.getElementById('closedDateInput');
+  const reasonEl = document.getElementById('closedReasonInput');
+  if(!dateEl || !dateEl.value) return;
+  try{
+    await apiAddClosedDate(dateEl.value, reasonEl ? reasonEl.value : '', staffPasswordInput);
+    closedDatesList = await apiGetClosedDates();
+    render();
+  }catch(e){
+    alert('休業日の追加に失敗しました。もう一度お試しください。');
+  }
+}
+async function staffRemoveClosedDate(date){
+  try{
+    await apiRemoveClosedDate(date, staffPasswordInput);
+    closedDatesList = await apiGetClosedDates();
+    render();
+  }catch(e){
+    alert('削除に失敗しました。もう一度お試しください。');
+  }
+}
+
 // グローバル公開
 window.setField=setField; window.setFieldSilent=setFieldSilent; window.setDateSilent=setDateSilent;
 window.setStartTimeSilent=setStartTimeSilent; window.setTableCount=setTableCount;
 window.toggleDateExpand=toggleDateExpand; window.staffRefresh=staffRefresh;
+window.staffAddClosedDate=staffAddClosedDate; window.staffRemoveClosedDate=staffRemoveClosedDate;
+window.toggleClosedWeekday=toggleClosedWeekday; window.staffSaveClosedWeekdays=staffSaveClosedWeekdays;
 window.toggleSwitch=toggleSwitch; window.goStep=goStep; window.submitReservation=submitReservation;
 window.toggleStaffPanel=toggleStaffPanel; window.staffLogin=staffLogin; window.staffLogout=staffLogout;
 
 (async () => {
   app.innerHTML = loadingScreenHtml("読み込んでいます");
   await initLiff();
+  closedDatesList = await apiGetClosedDates();
   render();
 })();
 </script>
