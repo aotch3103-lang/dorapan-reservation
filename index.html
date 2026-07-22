@@ -139,6 +139,7 @@
   .loading-dot{display:inline-block;animation:pulse-dot 1.2s infinite;}
   @media (prefers-reduced-motion: reduce){*{transition:none !important;} .loading-bounce{animation:none;} .loading-shadow{animation:none;} .loading-dot{animation:none;}}
 </style>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 </head>
 <body>
 <div id="app"></div>
@@ -154,6 +155,9 @@ const CONFIG = {
   // 例: "https://script.google.com/macros/s/xxxxxxxx/exec"
   // 空のままだと、ブラウザ内だけで動くテストモードになります（Googleスプレッドシートには保存されません）。
   APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbyN2IWOcS-7SFZzrYPE7vK7tGEyGdxySbLF7CNvGP_8-30jjke_yCWoMzWAs9sT68c-_g/exec",
+  // LINE DevelopersでLIFFを登録したら発行されるIDをここに貼り付けてください（例: "1234567890-AbCdEfGh"）。
+  // 空のままだと、通常のWebページとして動作します（LINEのuserId取得だけできません）。
+  LIFF_ID: "2010788751-CHBAw3u5",
   TOTAL_TABLES: 3,           // 店舗の総卓数
   DEMO_STAFF_PASSWORD: "0315", // ↑APPS_SCRIPT_URL未設定時のテスト用パスワード
 };
@@ -173,6 +177,26 @@ let expandedDates = new Set(); // タップして展開中の日付
 let staffPasswordInput = "";
 let staffError = "";
 let capacityInfo = null; // {totalTables, reserved, remaining}
+let liffUserId = "";
+let liffDisplayName = "";
+
+// LINEのuserIdを取得する。LIFF_ID未設定や、LINE以外のブラウザで開いた場合はスキップし、
+// 通常の予約フォームとしてそのまま使えるようにする（エラーで止めない）。
+async function initLiff(){
+  if(!CONFIG.LIFF_ID) return;
+  try{
+    await liff.init({ liffId: CONFIG.LIFF_ID });
+    if(!liff.isLoggedIn()){
+      liff.login();
+      return;
+    }
+    const profile = await liff.getProfile();
+    liffUserId = profile.userId;
+    liffDisplayName = profile.displayName;
+  }catch(e){
+    console.error('LIFF init failed', e);
+  }
+}
 let submitting = false;
 let submitError = "";
 
@@ -277,12 +301,13 @@ async function apiGetMonthOverview(password){
 }
 /* --------------------------------------------------------------------------- */
 
-function loadingScreenHtml(){
+function loadingScreenHtml(message){
+  message = message || "卓の空き状況を確認しています";
   return `
     <div style="min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:40px 24px; text-align:center;">
       <img src="${LOGO_DATA_URI}" alt="" class="loading-bounce" style="width:64px;height:64px;object-fit:contain;margin:0 auto 0;display:block;">
       <div class="loading-shadow"></div>
-      <h2 style="font-family:'Zen Maru Gothic',sans-serif;font-weight:900;font-size:20px;margin:14px 0 8px;color:var(--green-dark);">卓の空き状況を確認しています</h2>
+      <h2 style="font-family:'Zen Maru Gothic',sans-serif;font-weight:900;font-size:20px;margin:14px 0 8px;color:var(--green-dark);">${message}</h2>
       <p style="font-size:15px;font-weight:900;color:var(--green-dark);">
         <span class="loading-dot" style="animation-delay:0s;">。</span>
         <span class="loading-dot" style="animation-delay:0.2s;">。</span>
@@ -561,6 +586,8 @@ async function submitReservation(){
     tableCount: state.tableCount, roomType: state.roomType, format: state.format, points: state.points,
     akadora: state.akadora, hanahai: state.hanahai, chip: state.chip, yakitori: state.yakitori,
     request: state.request,
+    lineUserId: liffUserId,
+    lineDisplayName: liffDisplayName,
   };
   try{
     await apiSubmit(record);
@@ -621,12 +648,13 @@ function renderStaffPanel(){
           groups.map(g=>{
             const expanded = expandedDates.has(g.date);
             const compactLines = g.items.map(r=>
-              `${r.startTime}〜　${r.name}様　${r.tableCount}卓${r.roomType==='貸切希望' ? '　<span style="color:var(--pink-deep);font-weight:900;">（貸切）</span>' : ''}`
+              `${r.startTime}〜　${r.name}様　${r.tableCount}卓${r.roomType==='貸切希望' ? '　<span style="color:var(--pink-deep);font-weight:900;">（貸切）</span>' : ''}${r.confirmStatus!=='確認済み' ? '　<span style="color:var(--pink-deep);font-weight:900;">未確認</span>' : ''}`
             ).join('<br>');
             const detailHtml = g.items.map(r=>`
               <div class="res-item">
                 ${r.startTime}〜／${r.tableCount}卓／${r.roomType==='貸切希望'?'<strong style="color:var(--pink-deep);">貸切希望</strong>':'ルームシェアOK'}／${r.format}／${r.points}点<br>
                 ${r.name}様・${r.phone}<br>
+                確認ステータス：${r.confirmStatus==='確認済み'?'確認済み':'<strong style="color:var(--pink-deep);">未確認</strong>'}<br>
                 赤牌:${r.akadora===true||r.akadora==='あり'?'あり':'なし'}　花牌:${r.hanahai===true||r.hanahai==='あり'?'あり':'なし'}　チップ:${r.chip===true||r.chip==='あり'?'あり':'なし'}　ヤキトリ:${r.yakitori===true||r.yakitori==='あり'?'あり':'なし'}
                 ${r.request ? `<br>ご要望：${r.request}` : ''}
               </div>`).join('');
@@ -678,7 +706,11 @@ window.toggleDateExpand=toggleDateExpand; window.staffRefresh=staffRefresh;
 window.toggleSwitch=toggleSwitch; window.goStep=goStep; window.submitReservation=submitReservation;
 window.toggleStaffPanel=toggleStaffPanel; window.staffLogin=staffLogin; window.staffLogout=staffLogout;
 
-render();
+(async () => {
+  app.innerHTML = loadingScreenHtml("読み込んでいます");
+  await initLiff();
+  render();
+})();
 </script>
 </body>
 </html>
