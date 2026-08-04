@@ -173,7 +173,7 @@ let staffAuthed = false;
 let startTimeBlocked = false; // false | 'early' | 'late'
 let dateBlocked = false; // false、または表示するメッセージ文字列
 let closedDatesList = []; // [{date, reason}] 臨時休業日
-let closedWeekdays = [0, 1]; // 定休日（曜日番号）。サーバーから取得するまでのデフォルト値
+let weekdayRules = {0:0, 1:0}; // 曜日ごとの上限卓数（0=休業、未設定の曜日はCONFIG.TOTAL_TABLES扱い）。サーバーから取得するまでのデフォルト値
 let staffViewDate = null;
 let monthOverviewData = null; // ログイン後にキャッシュする「今月＋来月」の全予約データ
 let expandedDates = new Set(); // タップして展開中の日付
@@ -308,46 +308,46 @@ async function apiGetClosedDates(){
     try{
       const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=closedDates`);
       const data = await res.json();
-      if(Array.isArray(data.closedWeekdays)) closedWeekdays = data.closedWeekdays;
+      if(data.weekdayRules && typeof data.weekdayRules === 'object') weekdayRules = data.weekdayRules;
       return data.closedDates || [];
     }catch(e){ return []; }
   }
   try{
-    const storedWeekdays = await window.storage.get('closedWeekdays', true);
-    if(storedWeekdays && storedWeekdays.value) closedWeekdays = JSON.parse(storedWeekdays.value);
+    const storedRules = await window.storage.get('weekdayRules', true);
+    if(storedRules && storedRules.value) weekdayRules = JSON.parse(storedRules.value);
     const stored = await window.storage.get('closedDates', true);
     return stored && stored.value ? JSON.parse(stored.value) : [];
   }catch(e){ return []; }
 }
 
-async function apiUpdateClosedWeekdays(weekdays, password){
+async function apiUpdateWeekdayRules(rules, password){
   if(usingRealBackend()){
     const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=updateClosedWeekdays&password=${encodeURIComponent(password)}`, {
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({weekdays}),
+      body: JSON.stringify({weekdayRules: rules}),
     });
     const data = await res.json();
     if(data.error) throw new Error(data.error);
     return data;
   }
-  await window.storage.set('closedWeekdays', JSON.stringify(weekdays), true);
+  await window.storage.set('weekdayRules', JSON.stringify(rules), true);
   return {result:'ok'};
 }
 
-async function apiAddClosedDate(date, reason, password){
+async function apiAddClosedDate(date, reason, maxTables, password){
   if(usingRealBackend()){
     const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=addClosedDate&password=${encodeURIComponent(password)}`, {
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({date, reason}),
+      body: JSON.stringify({date, reason, maxTables}),
     });
     const data = await res.json();
     if(data.error) throw new Error(data.error);
     return data;
   }
   const list = await apiGetClosedDates();
-  list.push({date, reason});
+  list.push({date, reason, maxTables});
   await window.storage.set('closedDates', JSON.stringify(list), true);
   return {result:'ok'};
 }
@@ -603,20 +603,35 @@ function setField(name, value){ state[name] = value; render(); }
 // 画面を作り直さずに状態だけ更新し、ボタンの有効/無効だけを軽く同期する。
 function setFieldSilent(name, value){ state[name] = value; syncButtonState(); }
 
+// その日の「有効な上限卓数」を、日付個別ルール＞曜日ルール＞通常(CONFIG.TOTAL_TABLES)の優先順位で判定する。
+// フロント側は主に「完全に休業（上限0）かどうか」の日付ブロック判定に使う。
+// 実際の残り卓数（予約数を差し引いた値）はapiGetCapacity（サーバー側）が返す値を使う。
+function getDateOverride(value){
+  return closedDatesList.find(c => c.date === value);
+}
+function effectiveMaxTablesFor(value){
+  const dateMatch = getDateOverride(value);
+  if(dateMatch) return Number(dateMatch.maxTables || 0);
+  const d = new Date(value + 'T00:00:00');
+  const weekday = d.getDay();
+  if(Object.prototype.hasOwnProperty.call(weekdayRules, weekday)) return Number(weekdayRules[weekday]);
+  return CONFIG.TOTAL_TABLES;
+}
+function closedWeekdayMessage(){
+  const labels = ['日','月','火','水','木','金','土'];
+  const closedDays = Object.keys(weekdayRules).filter(k=>Number(weekdayRules[k])<=0).map(k=>labels[Number(k)]);
+  const label = closedDays.length ? `定休日（${closedDays.join('・')}）` : '定休日';
+  return `${label}のため、この日はご予約いただけません。<br>別の日をお選びください。`;
+}
 function setDateSilent(value){
   const msgEl = document.getElementById('date-error-msg');
   if(value){
-    const d = new Date(value + 'T00:00:00');
-    if(closedWeekdays.includes(d.getDay())){
-      dateBlocked = '定休日（日曜・月曜）のため、この日はご予約いただけません。<br>別の日をお選びください。';
-      state.date = ""; capacityInfo = null;
-      if(msgEl){ msgEl.innerHTML = dateBlocked; msgEl.style.display = 'block'; }
-      syncButtonState();
-      return;
-    }
-    const closedMatch = closedDatesList.find(c => c.date === value);
-    if(closedMatch){
-      dateBlocked = `臨時休業のため、この日はご予約いただけません。${closedMatch.reason ? '（'+closedMatch.reason+'）' : ''}<br>別の日をお選びください。`;
+    const dateMatch = getDateOverride(value);
+    const effectiveMax = effectiveMaxTablesFor(value);
+    if(effectiveMax <= 0){
+      dateBlocked = dateMatch
+        ? `臨時休業のため、この日はご予約いただけません。${dateMatch.reason ? '（'+dateMatch.reason+'）' : ''}<br>別の日をお選びください。`
+        : closedWeekdayMessage();
       state.date = ""; capacityInfo = null;
       if(msgEl){ msgEl.innerHTML = dateBlocked; msgEl.style.display = 'block'; }
       syncButtonState();
@@ -716,6 +731,22 @@ function groupByDate(reservations){
   return Object.keys(map).sort().map(date=>({date, items:map[date]}));
 }
 
+// 上限卓数の選択肢（休業(0)〜通常(CONFIG.TOTAL_TABLES)）を<option>群として生成する
+function tableLimitOptionsHtml(selectedValue){
+  let opts = '';
+  for(let n=CONFIG.TOTAL_TABLES; n>=0; n--){
+    const label = n===CONFIG.TOTAL_TABLES ? `通常（${n}卓・制限なし）` : (n===0 ? '休業' : `${n}卓まで`);
+    opts += `<option value="${n}" ${Number(selectedValue)===n?'selected':''}>${label}</option>`;
+  }
+  return opts;
+}
+function tableLimitLabel(n){
+  const v = Number(n);
+  if(v <= 0) return '休業';
+  if(v >= CONFIG.TOTAL_TABLES) return `通常（${CONFIG.TOTAL_TABLES}卓）`;
+  return `${v}卓まで`;
+}
+
 function renderStaffPanel(){
   if(!staffOpen) return '';
   if(!staffAuthed){
@@ -768,29 +799,41 @@ function renderStaffPanel(){
   const weekdayLabels = ['日','月','火','水','木','金','土'];
   const weekdaysHtml = `
     <div style="margin-bottom:16px; padding-bottom:14px; border-bottom:2px solid var(--green-pale);">
-      <div style="font-weight:900;color:var(--green-dark);margin-bottom:8px;">定休日の設定</div>
-      <div style="display:flex; gap:6px; margin-bottom:10px;">
-        ${weekdayLabels.map((label,i)=>`
-          <div class="chip" style="flex:1; padding:8px 4px; ${closedWeekdays.includes(i)?'background:var(--pink);border-color:var(--pink);color:var(--white);':''}"
-            onclick="toggleClosedWeekday(${i})">${label}</div>
-        `).join('')}
-      </div>
-      <button class="btn btn-primary" style="width:100%; padding:10px;" onclick="staffSaveClosedWeekdays()">この内容で保存</button>
+      <div style="font-weight:900;color:var(--green-dark);margin-bottom:4px;">曜日ごとの卓数設定</div>
+      <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px;">毎週決まって卓数が制限される（または休業する）曜日があれば設定してください。「通常」以外を選んだ曜日は、その卓数を上限として予約が制限されます。</div>
+      ${weekdayLabels.map((label,i)=>{
+        const current = Object.prototype.hasOwnProperty.call(weekdayRules, i) ? Number(weekdayRules[i]) : CONFIG.TOTAL_TABLES;
+        return `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--green-pale);">
+            <span style="font-weight:700;width:36px;">${label}曜</span>
+            <select style="flex:1;margin-left:10px;padding:8px;border-radius:10px;border:2px solid var(--green-pale);font-size:13px;background:#fff;"
+              onchange="setWeekdayRuleDraft(${i}, this.value)">
+              ${tableLimitOptionsHtml(current)}
+            </select>
+          </div>
+        `;
+      }).join('')}
+      <button class="btn btn-primary" style="width:100%; padding:10px; margin-top:10px;" onclick="staffSaveWeekdayRules()">この内容で保存</button>
     </div>
   `;
   const closedDatesHtml = `
     <div style="margin-bottom:16px; padding-bottom:14px; border-bottom:2px solid var(--green-pale);">
-      <div style="font-weight:900;color:var(--green-dark);margin-bottom:8px;">臨時休業日の管理</div>
+      <div style="font-weight:900;color:var(--green-dark);margin-bottom:4px;">特定の日の卓数設定</div>
+      <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px;">その日だけ休業・卓数を制限したいとき、または曜日設定を上書きして「その日だけ通常に戻したい」ときに登録してください。ここで登録した日は、曜日ごとの設定より優先されます。</div>
       <div class="login-row" style="margin-bottom:8px;">
         <input type="date" id="closedDateInput">
         <button onclick="staffAddClosedDate()">追加</button>
       </div>
+      <select id="closedDateMaxTables"
+        style="width:100%;margin-bottom:8px;padding:9px 10px;border-radius:10px;border:2px solid var(--green-pale);font-size:13px;box-sizing:border-box;background:#fff;">
+        ${tableLimitOptionsHtml(0)}
+      </select>
       <input type="text" id="closedReasonInput" placeholder="理由（任意）"
         style="width:100%;margin-bottom:12px;padding:9px 10px;border-radius:10px;border:2px solid var(--green-pale);font-size:13px;box-sizing:border-box;">
-      ${closedDatesList.length===0 ? `<div class="empty" style="padding:14px;">登録されている休業日はありません</div>` :
+      ${closedDatesList.length===0 ? `<div class="empty" style="padding:14px;">登録されている特定日の設定はありません</div>` :
         closedDatesList.map(c=>`
           <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--green-pale);font-size:13px;">
-            <span>${c.date}${c.reason?'　'+c.reason:''}</span>
+            <span>${c.date}　<strong style="color:${Number(c.maxTables)<=0?'var(--pink-deep)':'var(--green-dark)'};">${tableLimitLabel(c.maxTables)}</strong>${c.reason?'　'+c.reason:''}</span>
             <span style="cursor:pointer;color:var(--pink-deep);font-weight:700;text-decoration:underline;" onclick="staffRemoveClosedDate('${c.date}')">削除</span>
           </div>
         `).join('')
@@ -828,15 +871,13 @@ function toggleDateExpand(date){
   render();
 }
 
-function toggleClosedWeekday(dayIndex){
-  const i = closedWeekdays.indexOf(dayIndex);
-  if(i>-1) closedWeekdays.splice(i,1); else closedWeekdays.push(dayIndex);
-  render();
+function setWeekdayRuleDraft(dayIndex, value){
+  weekdayRules = Object.assign({}, weekdayRules, {[dayIndex]: Number(value)});
 }
-async function staffSaveClosedWeekdays(){
+async function staffSaveWeekdayRules(){
   try{
-    await apiUpdateClosedWeekdays(closedWeekdays, staffPasswordInput);
-    alert('定休日の設定を保存しました');
+    await apiUpdateWeekdayRules(weekdayRules, staffPasswordInput);
+    alert('曜日ごとの卓数設定を保存しました');
   }catch(e){
     alert('保存に失敗しました。もう一度お試しください。');
   }
@@ -844,13 +885,15 @@ async function staffSaveClosedWeekdays(){
 async function staffAddClosedDate(){
   const dateEl = document.getElementById('closedDateInput');
   const reasonEl = document.getElementById('closedReasonInput');
+  const maxTablesEl = document.getElementById('closedDateMaxTables');
   if(!dateEl || !dateEl.value) return;
   try{
-    await apiAddClosedDate(dateEl.value, reasonEl ? reasonEl.value : '', staffPasswordInput);
+    const maxTables = maxTablesEl ? Number(maxTablesEl.value) : 0;
+    await apiAddClosedDate(dateEl.value, reasonEl ? reasonEl.value : '', maxTables, staffPasswordInput);
     closedDatesList = await apiGetClosedDates();
     render();
   }catch(e){
-    alert('休業日の追加に失敗しました。もう一度お試しください。');
+    alert('登録に失敗しました。もう一度お試しください。');
   }
 }
 async function staffRemoveClosedDate(date){
@@ -868,7 +911,7 @@ window.setField=setField; window.setFieldSilent=setFieldSilent; window.setDateSi
 window.setStartTimeSilent=setStartTimeSilent; window.setTableCount=setTableCount;
 window.toggleDateExpand=toggleDateExpand; window.staffRefresh=staffRefresh;
 window.staffAddClosedDate=staffAddClosedDate; window.staffRemoveClosedDate=staffRemoveClosedDate;
-window.toggleClosedWeekday=toggleClosedWeekday; window.staffSaveClosedWeekdays=staffSaveClosedWeekdays;
+window.setWeekdayRuleDraft=setWeekdayRuleDraft; window.staffSaveWeekdayRules=staffSaveWeekdayRules;
 window.toggleSwitch=toggleSwitch; window.goStep=goStep; window.submitReservation=submitReservation;
 window.toggleStaffPanel=toggleStaffPanel; window.staffLogin=staffLogin; window.staffLogout=staffLogout;
 
