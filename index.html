@@ -627,9 +627,13 @@ function closedWeekdayMessage(){
   const label = closedDays.length ? `定休日（${closedDays.join('・')}）` : '定休日';
   return `${label}のため、この日はご予約いただけません。<br>別の日をお選びください。`;
 }
+// テキストエリアで入力された改行(Enter)を、表示用に<br>へ変換する
+function nl2br(text){
+  return String(text || '').replace(/\r\n|\r|\n/g, '<br>');
+}
 function dateNoticeMessage(dateMatch){
   if(!dateMatch || !dateMatch.note) return '';
-  return `${dateMatch.note}<br>詳細はドラパンまでご連絡ください（089-954-4614）`;
+  return `${nl2br(dateMatch.note)}<br>詳細はドラパンまでご連絡ください（089-954-4614）`;
 }
 function setDateSilent(value){
   const msgEl = document.getElementById('date-error-msg');
@@ -854,7 +858,7 @@ function renderStaffPanel(){
               <span>${c.date}　<strong style="color:${Number(c.maxTables)<=0?'var(--pink-deep)':'var(--green-dark)'};">${tableLimitLabel(c.maxTables)}</strong>${c.reason?'　'+c.reason:''}</span>
               <span style="cursor:pointer;color:var(--pink-deep);font-weight:700;text-decoration:underline;" onclick="staffRemoveClosedDate('${c.date}')">削除</span>
             </div>
-            ${c.note ? `<div style="color:var(--ink-soft);font-size:12px;margin-top:2px;">お知らせ：${c.note}</div>` : ''}
+            ${c.note ? `<div style="color:var(--ink-soft);font-size:12px;margin-top:2px;">お知らせ：${nl2br(c.note)}</div>` : ''}
           </div>
         `).join('')
       }
