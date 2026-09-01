@@ -825,6 +825,21 @@ function renderStaffPanel(){
       </div>
     `;
   }).join('');
+  const quickAddHtml = `
+    <div style="margin-bottom:16px; padding-bottom:14px; border-bottom:2px solid var(--green-pale);">
+      <div style="font-weight:900;color:var(--green-dark);margin-bottom:4px;">その場予約の追加（電話・来店など）</div>
+      <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px;">アプリを介さず電話や来店で入った予約を、スプレッドシートを開かずにその場で記録できます。ここで追加した内容は、通常の予約と同じようにお客様側の残り卓数にもすぐ反映されます。</div>
+      <input type="date" id="quickResDateInput" value="${new Date().toISOString().slice(0,10)}"
+        style="width:100%;margin-bottom:8px;padding:9px 10px;border-radius:10px;border:2px solid var(--green-pale);font-size:13px;box-sizing:border-box;">
+      <input type="text" id="quickResNameInput" placeholder="お名前（未入力の場合は「電話予約」として記録されます）"
+        style="width:100%;margin-bottom:8px;padding:9px 10px;border-radius:10px;border:2px solid var(--green-pale);font-size:13px;box-sizing:border-box;">
+      <select id="quickResTableCountInput"
+        style="width:100%;margin-bottom:12px;padding:9px 10px;border-radius:10px;border:2px solid var(--green-pale);font-size:13px;box-sizing:border-box;background:#fff;">
+        ${Array.from({length:CONFIG.TOTAL_TABLES}, (_,i)=>i+1).map(n=>`<option value="${n}">${n}卓</option>`).join('')}
+      </select>
+      <button class="btn btn-primary" style="width:100%; padding:10px;" onclick="staffAddQuickReservation()">この内容で追加</button>
+    </div>
+  `;
   const weekdayLabels = ['日','月','火','水','木','金','土'];
   const weekdaysHtml = `
     <div style="margin-bottom:16px; padding-bottom:14px; border-bottom:2px solid var(--green-pale);">
@@ -877,6 +892,7 @@ function renderStaffPanel(){
   return `
     <div class="staff-panel">
       <h3>予約状況を確認　<span style="cursor:pointer;text-decoration:underline;" onclick="staffRefresh()">更新</span>　<span style="cursor:pointer;text-decoration:underline;" onclick="staffLogout()">ログアウト</span></h3>
+      ${quickAddHtml}
       ${weekdaysHtml}
       ${closedDatesHtml}
       ${monthsHtml}
@@ -884,6 +900,31 @@ function renderStaffPanel(){
   `;
 }
 
+async function staffAddQuickReservation(){
+  const dateEl = document.getElementById('quickResDateInput');
+  const nameEl = document.getElementById('quickResNameInput');
+  const tableCountEl = document.getElementById('quickResTableCountInput');
+  if(!dateEl || !dateEl.value){ alert('日付を選んでください'); return; }
+  const record = {
+    name: (nameEl && nameEl.value.trim()) ? nameEl.value.trim() : '電話予約',
+    phone: '',
+    date: dateEl.value,
+    startTime: '',
+    tableCount: tableCountEl ? Number(tableCountEl.value) : 1,
+    format: '', points: '',
+    akadora: false, hanahai: false, chip: false, yakitori: false,
+    request: '', roomType: '',
+    lineUserId: '', lineDisplayName: '',
+  };
+  try{
+    await apiSubmit(record);
+    if(nameEl) nameEl.value = '';
+    await staffRefresh();
+    alert('その場予約を追加しました');
+  }catch(e){
+    alert(`追加に失敗しました：${e.message || 'もう一度お試しください'}`);
+  }
+}
 async function staffLogin(){
   try{
     monthOverviewData = await apiGetMonthOverview(staffPasswordInput);
@@ -947,6 +988,7 @@ window.setStartTimeSilent=setStartTimeSilent; window.setTableCount=setTableCount
 window.toggleDateExpand=toggleDateExpand; window.staffRefresh=staffRefresh;
 window.staffAddClosedDate=staffAddClosedDate; window.staffRemoveClosedDate=staffRemoveClosedDate;
 window.setWeekdayRuleDraft=setWeekdayRuleDraft; window.staffSaveWeekdayRules=staffSaveWeekdayRules;
+window.staffAddQuickReservation=staffAddQuickReservation;
 window.toggleSwitch=toggleSwitch; window.goStep=goStep; window.submitReservation=submitReservation;
 window.toggleStaffPanel=toggleStaffPanel; window.staffLogin=staffLogin; window.staffLogout=staffLogout;
 
