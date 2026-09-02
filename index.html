@@ -454,7 +454,7 @@ async function renderAsync(){
           <div class="chip ${state.roomType==='貸切希望'?'selected':''} ${hasExisting?'disabled':''}"
             onclick="${hasExisting?'':"setField('roomType','貸切希望')"}">貸切希望</div>
         </div>
-        ${hasExisting ? `<div class="capacity-note full">恐れ入りますが、本日はすでに他のお客様のご予約が入っているため、貸切のご予約は承れません。ルームシェアでのご利用をお願いいたします。</div>` : ''}
+        ${hasExisting && remaining>0 ? `<div class="capacity-note full">恐れ入りますが、本日はすでに他のお客様のご予約が入っているため、貸切のご予約は承れません。ルームシェアでのご利用をお願いいたします。</div>` : ''}
         ${priceNoteHtml()}
         <div class="section-label">設定</div>
         <div class="chip-grid two">
