@@ -436,6 +436,10 @@ async function renderAsync(){
     }
     const remaining = capacityInfo ? capacityInfo.remaining : CONFIG.TOTAL_TABLES;
     const hasExisting = capacityInfo ? capacityInfo.hasExistingReservation : false;
+    // イベント等で本日の上限卓数が通常（CONFIG.TOTAL_TABLES）より絞られている日は、
+    // すでに予約が入っているかどうかにかかわらず、そもそも貸切（全卓貸切）の提供自体を行わない。
+    const isLimitedDay = capacityInfo ? Number(capacityInfo.totalTables) < CONFIG.TOTAL_TABLES : false;
+    const charterUnavailable = hasExisting || isLimitedDay;
     body = `
       <div class="card">
         <h2>卓数・設定</h2>
@@ -452,10 +456,10 @@ async function renderAsync(){
         <div class="section-label">利用形態</div>
         <div class="chip-grid two">
           <div class="chip ${state.roomType==='ルームシェアOK'?'selected':''}" onclick="setField('roomType','ルームシェアOK')">ルームシェアOK</div>
-          <div class="chip ${state.roomType==='貸切希望'?'selected':''} ${hasExisting?'disabled':''}"
-            onclick="${hasExisting?'':"setField('roomType','貸切希望')"}">貸切希望</div>
+          <div class="chip ${state.roomType==='貸切希望'?'selected':''} ${charterUnavailable?'disabled':''}"
+            onclick="${charterUnavailable?'':"setField('roomType','貸切希望')"}">貸切希望</div>
         </div>
-        ${hasExisting ? `<div class="capacity-note full">恐れ入りますが、本日はすでに他のお客様のご予約が入っているため、貸切のご予約は承れません。ルームシェアでのご利用をお願いいたします。</div>` : ''}
+        ${charterUnavailable ? `<div class="capacity-note full">恐れ入りますが、本日は貸切のご予約を承っておりません。ルームシェアでのご利用をお願いいたします。</div>` : ''}
         ${priceNoteHtml()}
         <div class="section-label">設定</div>
         <div class="chip-grid two">
