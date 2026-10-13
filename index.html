@@ -336,19 +336,20 @@ async function apiUpdateWeekdayRules(rules, password){
   return {result:'ok'};
 }
 
-async function apiAddClosedDate(date, reason, maxTables, note, password){
+// kind: 予約を止める日（maxTables=0）の種類。'short'＝時短営業のため休止、それ以外（空欄含む）＝臨時休業。
+async function apiAddClosedDate(date, reason, maxTables, note, kind, password){
   if(usingRealBackend()){
     const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=addClosedDate&password=${encodeURIComponent(password)}`, {
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({date, reason, maxTables, note}),
+      body: JSON.stringify({date, reason, maxTables, note, kind}),
     });
     const data = await res.json();
     if(data.error) throw new Error(data.error);
     return data;
   }
   const list = await apiGetClosedDates();
-  list.push({date, reason, maxTables, note});
+  list.push({date, reason, maxTables, note, kind});
   await window.storage.set('closedDates', JSON.stringify(list), true);
   return {result:'ok'};
 }
@@ -659,8 +660,10 @@ function setDateSilent(value){
     const dateMatch = getDateOverride(value);
     const effectiveMax = effectiveMaxTablesFor(value);
     if(effectiveMax <= 0){
+      // 日付ごとの設定で予約を止めている日は、種別に応じて断りの頭の文言を出し分ける
+      // （'short'＝時短営業のため休止、それ以外＝臨時休業）。理由欄に入力があれば文末に添える。
       dateBlocked = dateMatch
-        ? `臨時休業のため、この日はご予約いただけません。${dateMatch.reason ? '（'+dateMatch.reason+'）' : ''}<br>別の日をお選びください。`
+        ? `${dateMatch.kind === 'short' ? '時短営業' : '臨時休業'}のため、この日はご予約いただけません。${dateMatch.reason ? '（'+dateMatch.reason+'）' : ''}<br>別の日をお選びください。`
         : closedWeekdayMessage();
       dateNoticeText = '';
       state.date = ""; state.startTime = ""; capacityInfo = null;
@@ -780,9 +783,21 @@ function tableLimitOptionsHtml(selectedValue){
   }
   return opts;
 }
-function tableLimitLabel(n){
+// 「特定の日の設定」専用の選択肢。曜日設定の選択肢に加えて「時短営業のため休止」を持つ。
+// value は 数字（上限卓数）／'closed'（休業）／'short'（時短営業のため休止）。
+function dateLimitOptionsHtml(){
+  let opts = '';
+  for(let n=CONFIG.TOTAL_TABLES; n>=1; n--){
+    const label = n===CONFIG.TOTAL_TABLES ? `通常（${n}卓・制限なし）` : `${n}卓まで`;
+    opts += `<option value="${n}">${label}</option>`;
+  }
+  opts += `<option value="closed" selected>休業（臨時休業のため）</option>`;
+  opts += `<option value="short">時短営業のため休止（予約停止）</option>`;
+  return opts;
+}
+function tableLimitLabel(n, kind){
   const v = Number(n);
-  if(v <= 0) return '休業';
+  if(v <= 0) return kind === 'short' ? '時短営業のため休止' : '休業';
   if(v >= CONFIG.TOTAL_TABLES) return `通常（${CONFIG.TOTAL_TABLES}卓）`;
   return `${v}卓まで`;
 }
@@ -874,16 +889,17 @@ function renderStaffPanel(){
   const closedDatesHtml = `
     <div style="margin-bottom:16px; padding-bottom:14px; border-bottom:2px solid var(--green-pale);">
       <div style="font-weight:900;color:var(--green-dark);margin-bottom:4px;">特定の日の卓数設定</div>
-      <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px;">その日だけ休業・卓数を制限したいとき、または曜日設定を上書きして「その日だけ通常に戻したい」ときに登録してください。ここで登録した日は、曜日ごとの設定より優先されます。お知らせ文を入力すると、お客様がその日を選んだときに注意書きとして表示されます（休業日の場合は表示されません）。</div>
+      <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px;">その日だけ休業・卓数を制限したいとき、または曜日設定を上書きして「その日だけ通常に戻したい」ときに登録してください。ここで登録した日は、曜日ごとの設定より優先されます。お知らせ文を入力すると、お客様がその日を選んだときに注意書きとして表示されます（予約を止める日には表示されません）。</div>
+      <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px;">※時短営業でも貸卓を受け付ける日は「通常」を選んでお知らせ文に営業時間を、貸卓を受け付けない日は「時短営業のため休止」を選んでください。</div>
       <div class="login-row" style="margin-bottom:8px;">
         <input type="date" id="closedDateInput">
         <button onclick="staffAddClosedDate()">追加</button>
       </div>
       <select id="closedDateMaxTables"
         style="width:100%;margin-bottom:8px;padding:9px 10px;border-radius:10px;border:2px solid var(--green-pale);font-size:13px;box-sizing:border-box;background:#fff;">
-        ${tableLimitOptionsHtml(0)}
+        ${dateLimitOptionsHtml()}
       </select>
-      <input type="text" id="closedReasonInput" placeholder="理由（任意・スタッフ内部の管理用）"
+      <input type="text" id="closedReasonInput" placeholder="理由（任意・お客様にも表示されます。例：イベントのため）"
         style="width:100%;margin-bottom:8px;padding:9px 10px;border-radius:10px;border:2px solid var(--green-pale);font-size:13px;box-sizing:border-box;">
       <textarea id="closedDateNoteInput" placeholder="お客様に表示するお知らせ文（任意・例：本日は12:00〜20:00の時短営業です）"
         style="width:100%;margin-bottom:12px;padding:9px 10px;border-radius:10px;border:2px solid var(--green-pale);font-size:13px;box-sizing:border-box;min-height:56px;font-family:inherit;resize:vertical;"></textarea>
@@ -891,7 +907,7 @@ function renderStaffPanel(){
         closedDatesList.map(c=>`
           <div style="padding:6px 0;border-bottom:1px solid var(--green-pale);font-size:13px;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-              <span>${c.date}　<strong style="color:${Number(c.maxTables)<=0?'var(--pink-deep)':'var(--green-dark)'};">${tableLimitLabel(c.maxTables)}</strong>${c.reason?'　'+c.reason:''}</span>
+              <span>${c.date}　<strong style="color:${Number(c.maxTables)<=0?'var(--pink-deep)':'var(--green-dark)'};">${tableLimitLabel(c.maxTables, c.kind)}</strong>${c.reason?'　'+c.reason:''}</span>
               <span style="cursor:pointer;color:var(--pink-deep);font-weight:700;text-decoration:underline;" onclick="staffRemoveClosedDate('${c.date}')">削除</span>
             </div>
             ${c.note ? `<div style="color:var(--ink-soft);font-size:12px;margin-top:2px;">お知らせ：${nl2br(c.note)}</div>` : ''}
@@ -975,8 +991,11 @@ async function staffAddClosedDate(){
   const noteEl = document.getElementById('closedDateNoteInput');
   if(!dateEl || !dateEl.value) return;
   try{
-    const maxTables = maxTablesEl ? Number(maxTablesEl.value) : 0;
-    await apiAddClosedDate(dateEl.value, reasonEl ? reasonEl.value : '', maxTables, noteEl ? noteEl.value : '', staffPasswordInput);
+    // プルダウンの値は 数字（上限卓数）／'closed'（休業）／'short'（時短営業のため休止）
+    const selected = maxTablesEl ? maxTablesEl.value : 'closed';
+    const kind = selected === 'short' ? 'short' : '';
+    const maxTables = (selected === 'closed' || selected === 'short') ? 0 : Number(selected);
+    await apiAddClosedDate(dateEl.value, reasonEl ? reasonEl.value : '', maxTables, noteEl ? noteEl.value : '', kind, staffPasswordInput);
     closedDatesList = await apiGetClosedDates();
     render();
   }catch(e){
