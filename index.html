@@ -171,6 +171,9 @@ let step = 0;
 let staffOpen = false;
 let staffAuthed = false;
 let startTimeBlocked = false; // false | 'early' | 'late'
+let dateFull = false; // 満卓（残り0卓）の日
+let capacityChecking = false; // 空き状況を確認中
+let capacityCheckSeq = 0; // 古い応答を無視するための連番
 let dateBlocked = false; // false、または表示するメッセージ文字列
 let dateNoticeText = ''; // その日が時短営業などの「お知らせ」がある場合の案内文（予約はブロックしない）
 let closedDatesList = []; // [{date, reason, maxTables, note}] 特定日の設定（休業・卓数制限・お知らせ）
@@ -418,8 +421,9 @@ async function renderAsync(){
         <div id="date-notice-msg" class="capacity-note" style="margin-top:-8px; margin-bottom:16px; text-align:center; line-height:1.9; display:${(!dateBlocked && dateNoticeText)?'block':'none'};">
           ${dateNoticeText || ''}
         </div>
+        <div id="date-capacity-msg" class="capacity-note ${dateFull?'full':''}" style="margin-top:-8px; margin-bottom:16px; text-align:center; line-height:1.9; display:${dateCapacityMessageHtml()?'block':'none'};">${dateCapacityMessageHtml()}</div>
         <label class="field">開始時間</label>
-        <div id="startTime-section" style="display:${dateBlocked?'none':'block'};">
+        <div id="startTime-section" style="display:${(dateBlocked||dateFull)?'none':'block'};">
           <p class="sub" id="startTime-sub-note" style="margin:-4px 0 10px;">${startTimeSubNoteText()}</p>
           <input type="time" id="in-startTime" value="${state.startTime}" step="60"
             onchange="setStartTimeSilent(this)">
@@ -602,7 +606,7 @@ function restoreFocus(info){
 }
 
 function stepValid(){
-  if(step===1) return !!(state.date && state.startTime);
+  if(step===1) return !!(state.date && state.startTime && !dateFull && !capacityChecking);
   if(step===2) return !!(state.tableCount && state.roomType && state.format && state.points);
   if(step===3) return true;
   if(step===4) return !!(state.name.trim() && state.phone.trim());
@@ -658,6 +662,40 @@ function dateNoticeMessage(dateMatch){
   if(!dateMatch || !dateMatch.note) return '';
   return `${nl2br(dateMatch.note)}<br>詳細はドラパンまでご連絡ください（089-954-4614）`;
 }
+function dateCapacityMessageHtml(){
+  if(!state.date || dateBlocked) return '';
+  if(capacityChecking) return '空き状況を確認しています…';
+  if(!capacityInfo) return '';
+  const total = Number(capacityInfo.totalTables);
+  const remaining = Number(capacityInfo.remaining);
+  if(remaining <= 0) return 'この日は満卓のため、ご予約いただけません。<br>別の日をお選びください。';
+  return `この日の残り卓数：${remaining}／${total}卓`;
+}
+function applyDateCapacityUi(){
+  const el = document.getElementById('date-capacity-msg');
+  const sec = document.getElementById('startTime-section');
+  const html = dateCapacityMessageHtml();
+  if(el){
+    el.innerHTML = html;
+    el.style.display = html ? 'block' : 'none';
+    el.classList.toggle('full', dateFull);
+  }
+  if(sec && !dateBlocked) sec.style.display = dateFull ? 'none' : 'block';
+  syncButtonState();
+}
+async function checkDateCapacity(date){
+  const seq = ++capacityCheckSeq;
+  capacityChecking = true; dateFull = false; capacityInfo = null;
+  applyDateCapacityUi();
+  let info = null;
+  try{ info = await apiGetCapacity(date); }catch(e){ info = null; }
+  if(seq !== capacityCheckSeq || state.date !== date) return; // 日付が変わっていたら無視
+  capacityChecking = false;
+  capacityInfo = info && typeof info.remaining !== 'undefined' ? info : null; // 失敗時は止めずに次の画面で確認
+  dateFull = !!(capacityInfo && Number(capacityInfo.remaining) <= 0);
+  if(dateFull) state.startTime = "";
+  applyDateCapacityUi();
+}
 function setDateSilent(value){
   const msgEl = document.getElementById('date-error-msg');
   const noticeEl = document.getElementById('date-notice-msg');
@@ -674,6 +712,8 @@ function setDateSilent(value){
         : closedWeekdayMessage();
       dateNoticeText = '';
       state.date = ""; state.startTime = ""; capacityInfo = null;
+      capacityCheckSeq++; capacityChecking = false; dateFull = false;
+      { const cm = document.getElementById('date-capacity-msg'); if(cm){ cm.innerHTML=''; cm.style.display='none'; } }
       if(msgEl){ msgEl.innerHTML = dateBlocked; msgEl.style.display = 'block'; }
       if(noticeEl){ noticeEl.innerHTML = ''; noticeEl.style.display = 'none'; }
       if(subNoteEl) subNoteEl.innerHTML = startTimeSubNoteText();
@@ -690,7 +730,9 @@ function setDateSilent(value){
   if(noticeEl){ noticeEl.innerHTML = dateNoticeText; noticeEl.style.display = dateNoticeText ? 'block' : 'none'; }
   if(subNoteEl) subNoteEl.innerHTML = startTimeSubNoteText();
   if(startTimeSectionEl) startTimeSectionEl.style.display = 'block';
-  state.date = value; capacityInfo = null; syncButtonState();
+  state.date = value; capacityInfo = null; dateFull = false;
+  if(value){ checkDateCapacity(value); }
+  else { capacityCheckSeq++; capacityChecking = false; applyDateCapacityUi(); }
 }
 
 function timeErrorMessageHtml(){
